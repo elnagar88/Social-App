@@ -1,27 +1,81 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import axios from 'axios'
-import { useContext } from 'react'
+import { useContext, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import toast from 'react-hot-toast'
+import { FaCamera, FaEye, FaEyeSlash, FaLock } from 'react-icons/fa'
 import z from 'zod'
-import { UserData } from '../../context/UserContext'
-import useProfile from './../../hooks/useProfile'
+import { changePassword, uploadPhoto } from '../../api/users'
+import FieldError from '../../components/Form/FieldError'
+import { PASSWORD_REGEX, QUERY_KEYS } from '../../config/constants'
+import { UserData } from '../../context/UserData'
+import useProfile from '../../hooks/useProfile'
+import { getErrorMessage } from '../../utils/helpers'
+
+const passwordSchema = z.object({
+  password: z.string().min(1, 'Write your current password'),
+  newPassword: z.string().regex(PASSWORD_REGEX, 'Ex. Abc@1234'),
+})
+
+function showError(error) {
+  toast.error(getErrorMessage(error, 'Something went wrong'))
+}
+
+function Spinner() {
+  return <span className="h-4 w-4 animate-spin rounded-full border-2 border-cream border-b-transparent"></span>
+}
+
+function SettingsCard({ icon, title, description, children }) {
+  return (
+    <div className="rounded-2xl border border-sand bg-cream p-5 shadow-sm sm:p-6">
+      <div className="mb-5 flex items-start gap-3">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-beige text-accent">
+          {icon}
+        </span>
+        <div>
+          <h3 className="text-lg font-semibold text-ink">{title}</h3>
+          <p className="mt-0.5 text-sm leading-6 text-muted">{description}</p>
+        </div>
+      </div>
+      {children}
+    </div>
+  )
+}
+
+function PasswordInput({ label, placeholder, registration, error }) {
+  const [isVisible, setIsVisible] = useState(false)
+
+  return (
+    <div>
+      <label htmlFor={registration.name} className="mb-1.5 block text-sm font-medium text-ink">{label}</label>
+      <div className="relative">
+        <input
+          id={registration.name}
+          type={isVisible ? 'text' : 'password'}
+          placeholder={placeholder}
+          {...registration}
+          className="w-full rounded-xl border border-sand bg-white px-4 py-2.5 pe-11 text-sm text-ink outline-none transition placeholder:text-muted/60 focus:border-accent focus:ring-2 focus:ring-accent/20"
+        />
+        <button
+          type="button"
+          onClick={() => setIsVisible((visible) => !visible)}
+          className="absolute inset-y-0 end-0 flex w-11 items-center justify-center text-muted transition hover:text-accent cursor-pointer"
+          aria-label={isVisible ? 'Hide password' : 'Show password'}
+        >
+          {isVisible ? <FaEyeSlash /> : <FaEye />}
+        </button>
+      </div>
+      <FieldError error={error} />
+    </div>
+  )
+}
 
 export default function Settings() {
   const { Token } = useContext(UserData)
   const { data: user } = useProfile()
   const queryClient = useQueryClient()
-
-  const passwordSchema = z.object({
-    password: z.string().min(1, 'Write your current password'),
-    newPassword: z
-      .string()
-      .regex(
-        /^(?=.*?[A-Z])(?=.*?[a-z])(?=.*?[0-9])(?=.*?[#?!@$%^&*-]).{8,}$/,
-        'Ex. Abc@1234'
-      ),
-  })
+  const [photoPreview, setPhotoPreview] = useState(null)
+  const photoInputRef = useRef(null)
 
   const {
     register: registerPassword,
@@ -41,143 +95,144 @@ export default function Settings() {
     defaultValues: { photo: null },
   })
 
-  async function updatePassword(values) {
-    return await axios.patch(
-      `https://route-posts.routemisr.com/users/change-password`,
-      values,
-      { headers: { token: Token } }
-    )
+  const photoField = registerPhoto('photo')
+
+  function choosePhoto(e) {
+    photoField.onChange(e)
+    const file = e.target.files[0]
+    if (photoPreview) URL.revokeObjectURL(photoPreview)
+    setPhotoPreview(file ? URL.createObjectURL(file) : null)
   }
 
-  const { mutate: updatePasswordMutate } = useMutation({
+  function clearPhoto() {
+    if (photoPreview) URL.revokeObjectURL(photoPreview)
+    setPhotoPreview(null)
+    resetPhotoForm()
+    if (photoInputRef.current) photoInputRef.current.value = ''
+  }
+
+  const { mutate: updatePasswordMutate, isPending: isPasswordPending } = useMutation({
     mutationKey: ['UpdatePassword'],
-    mutationFn: updatePassword,
+    mutationFn: (values) => changePassword(values, Token),
     onSuccess: () => {
       toast.success('Password Changed Successfully')
       resetPasswordForm()
     },
-    onError: (error) => {
-      toast.error(error?.response?.data?.message || 'Something went wrong')
-    },
+    onError: showError,
   })
-
-  async function uploadPhoto(values) {
-    const form = new FormData()
-    if (values?.photo?.length > 0) {
-      form.append('photo', values.photo[0])
-    }
-    return await axios.put(
-      'https://route-posts.routemisr.com/users/upload-photo',
-      form,
-      { headers: { token: Token } }
-    )
-  }
 
   const { mutate, isPending } = useMutation({
     mutationKey: ['UploadPhoto'],
-    mutationFn: uploadPhoto,
+    mutationFn: (values) => uploadPhoto(values, Token),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['Profile'] })
-      resetPhotoForm()
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.profile] })
+      clearPhoto()
     },
-    onError: (error) => {
-      toast.error(error?.response?.data?.message || 'Something went wrong')
-    },
+    onError: showError,
   })
 
   return <>
     <title>Settings | Social App</title>
-    <section className="mx-auto mb-5 flex w-full max-w-4xl flex-col gap-6 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
-      <div className="flex flex-col gap-8 lg:flex-row lg:items-start lg:justify-between">
-        <div className="flex flex-col items-center text-center lg:items-start lg:text-left">
-          <div className="group relative mb-4 h-32 w-32 overflow-hidden rounded-full border-4 border-white bg-slate-100 shadow-[0_0_0_12px_rgba(255,255,255,0.9)] sm:h-40 sm:w-40">
+    <section className="mx-auto mb-8 flex w-full max-w-2xl flex-col gap-5">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight text-ink sm:text-3xl">Settings</h1>
+        <p className="mt-1 text-sm text-muted">Manage your profile photo and account security.</p>
+      </div>
+
+      <SettingsCard
+        icon={<FaCamera />}
+        title="Profile Photo"
+        description="Click your photo to choose a new one. PNG, JPG, or WEBP up to 5MB."
+      >
+        <form
+          onSubmit={handlePhotoSubmit((values) => mutate(values))}
+          className="flex flex-col items-center gap-5 sm:flex-row"
+        >
+          <label
+            htmlFor="photo"
+            className="group relative h-28 w-28 shrink-0 cursor-pointer overflow-hidden rounded-full bg-beige ring-4 ring-beige ring-offset-2 ring-offset-cream transition hover:ring-accent/40"
+          >
             <img
-              src={user?.photo}
+              src={photoPreview || user?.photo}
               alt="Profile preview"
               className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
             />
-            <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition duration-300 group-hover:opacity-100">
-              <span className="text-sm font-medium text-white">Change</span>
+            <span className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-ink/50 text-cream opacity-0 transition duration-300 group-hover:opacity-100">
+              <FaCamera />
+              <span className="text-xs font-medium">Change</span>
+            </span>
+          </label>
+          <input
+            id="photo"
+            type="file"
+            accept="image/*"
+            hidden
+            {...photoField}
+            onChange={choosePhoto}
+            ref={(el) => {
+              photoField.ref(el)
+              photoInputRef.current = el
+            }}
+          />
+
+          <div className="flex w-full flex-col items-center gap-3 sm:items-start">
+            <div className="text-center sm:text-start">
+              <p className="font-semibold text-ink">{user?.name}</p>
+              <p className="text-sm text-muted">
+                {photoPreview ? 'New photo selected — upload to save it.' : 'No new photo selected.'}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                disabled={!photoPreview || isPending}
+                className="flex min-w-32 items-center justify-center rounded-full bg-accent px-5 py-2 text-sm font-semibold text-cream shadow-sm transition hover:opacity-90 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100 cursor-pointer"
+              >
+                {isPending ? <Spinner /> : 'Upload Photo'}
+              </button>
+              {photoPreview && !isPending && (
+                <button
+                  type="button"
+                  onClick={clearPhoto}
+                  className="rounded-full border border-sand px-5 py-2 text-sm font-medium text-muted transition hover:bg-beige cursor-pointer"
+                >
+                  Cancel
+                </button>
+              )}
             </div>
           </div>
-          <p className="text-sm text-slate-500">PNG, JPG, or WEBP up to 5MB</p>
-        </div>
+        </form>
+      </SettingsCard>
 
-        <div className="w-full max-w-md">
-          <h3 className="text-2xl font-semibold text-main">Change Profile Photo</h3>
-          <p className="mt-2 text-sm leading-6 text-slate-600">
-            Choose a fresh photo to update your profile image and make your account feel more personal.
-          </p>
-
-          <form
-            onSubmit={handlePhotoSubmit(mutate)}
-            className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center"
-          >
-            <input
-              id="file"
-              {...registerPhoto('photo')}
-              type="file"
-              className="w-full cursor-pointer rounded-2xl bg-white px-4 py-3 text-sm file:mr-3 file:cursor-pointer file:rounded-full file:border-0 file:bg-main file:px-3 file:py-1.5 file:text-white hover:opacity-90 sm:w-auto"
-            />
+      <SettingsCard
+        icon={<FaLock />}
+        title="Update Password"
+        description="Keep your account secure by changing your password regularly."
+      >
+        <form className="space-y-4" onSubmit={handlePasswordSubmit((values) => updatePasswordMutate(values))}>
+          <PasswordInput
+            label="Current Password"
+            placeholder="Enter current password"
+            registration={registerPassword('password')}
+            error={passwordFormState.errors.password}
+          />
+          <PasswordInput
+            label="New Password"
+            placeholder="Enter new password"
+            registration={registerPassword('newPassword')}
+            error={passwordFormState.errors.newPassword}
+          />
+          <div className="flex justify-end pt-1">
             <button
               type="submit"
-              disabled={isPending}
-              className="rounded-full bg-main py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-main/90 disabled:opacity-60"
+              disabled={isPasswordPending}
+              className="flex min-w-40 items-center justify-center rounded-full bg-olive px-5 py-2.5 text-sm font-semibold text-cream shadow-sm transition hover:opacity-90 active:scale-95 disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer"
             >
-              {isPending ? <span className="loader" /> : 'Upload Image'}
+              {isPasswordPending ? <Spinner /> : 'Update Password'}
             </button>
-          </form>
-        </div>
-      </div>
-
-      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 sm:p-6">
-        <div className="mb-5">
-          <h3 className="text-xl font-semibold text-main">Update Password</h3>
-          <p className="mt-2 text-sm leading-6 text-slate-600">
-            Keep your account secure by changing your password regularly.
-          </p>
-        </div>
-
-        <form className="space-y-4" onSubmit={handlePasswordSubmit(updatePasswordMutate)}>
-          <div>
-            <label className="mb-2 block text-sm font-medium text-slate-700">Current Password</label>
-            <input
-              type="password"
-              placeholder="Enter current password"
-              {...registerPassword('password')}
-              className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none transition focus:border-main focus:ring-2 focus:ring-main/20"
-            />
-            {passwordFormState.errors.password && (
-              <p className="text-main mt-2 font-medium">
-                {passwordFormState.errors.password.message}
-              </p>
-            )}
           </div>
-
-          <div>
-            <label className="mb-2 block text-sm font-medium text-slate-700">New Password</label>
-            <input
-              type="password"
-              placeholder="Enter new password"
-              {...registerPassword('newPassword')}
-              className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none transition focus:border-main focus:ring-2 focus:ring-main/20"
-            />
-            {passwordFormState.errors.newPassword && (
-              <p className="text-main mt-2 font-medium">
-                {passwordFormState.errors.newPassword.message}
-              </p>
-            )}
-          </div>
-
-          <button
-            type="submit"
-            className="rounded-full cursor-pointer bg-main px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-main/90"
-          >
-            Update Password
-          </button>
         </form>
-      </div>
+      </SettingsCard>
     </section>
   </>
-  
 }
